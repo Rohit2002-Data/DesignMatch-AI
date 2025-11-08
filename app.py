@@ -1,8 +1,8 @@
 import os
-import tempfile
 import streamlit as st
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph
 from pydantic import BaseModel
+from typing import Optional
 from openai import OpenAI
 from PIL import Image, ImageChops, ImageStat
 import requests
@@ -12,7 +12,7 @@ from io import BytesIO
 # =====================================================
 # 🔑 OPENAI SETUP (replace with your actual key)
 # =====================================================
-client = OpenAI(api_key="YOUR_OPENAI_KEY_HERE")  # Put your key here
+client = OpenAI(api_key="YOUR_OPENAI_KEY_HERE")  # Replace with your key or environment variable
 
 
 # =====================================================
@@ -30,14 +30,14 @@ run_button = st.sidebar.button("🚀 Run Comparison")
 
 
 # =====================================================
-# 🧩 DEFINE STATE CLASS (Pydantic)
+# 🧩 DEFINE STATE CLASS (Pydantic v2 Compatible)
 # =====================================================
 class InputState(BaseModel):
-    figma_link: str = None
-    web_url: str = None
-    figma_image = None
-    web_image = None
-    diff_image = None
+    figma_link: Optional[str] = None
+    web_url: Optional[str] = None
+    figma_image: Optional[Image.Image] = None
+    web_image: Optional[Image.Image] = None
+    diff_image: Optional[Image.Image] = None
     diff_score: float = 0.0
     ai_report: str = ""
 
@@ -54,10 +54,11 @@ def capture_website_image(state: InputState):
         response = requests.get(screenshot_url, timeout=30)
         if response.status_code == 200:
             state.web_image = Image.open(BytesIO(response.content)).convert("RGB")
+            st.success("✅ Website screenshot captured successfully!")
         else:
-            raise Exception("Failed to fetch website screenshot.")
+            st.error("❌ Failed to fetch website screenshot.")
     except Exception as e:
-        st.error(f"❌ Failed to capture website image: {e}")
+        st.error(f"❌ Error capturing website: {e}")
     return state
 
 
@@ -71,40 +72,43 @@ def compare_images(state: InputState):
         diff_score = sum(stat.mean) / len(stat.mean)
         state.diff_image = diff
         state.diff_score = diff_score
+        st.success(f"✅ Image comparison complete! Difference score: {round(diff_score, 2)}")
     except Exception as e:
         st.error(f"❌ Image comparison failed: {e}")
     return state
 
 
 def ai_analyze(state: InputState):
-    """Use OpenAI GPT to analyze the visual differences."""
+    """Use OpenAI GPT model to analyze the visual differences."""
     st.info("🤖 Analyzing visual differences with AI...")
     try:
         prompt = f"""
         You are a design QA assistant.
-        The system has compared a Figma design with a live webpage.
+        The system compared a Figma design with a live webpage.
         The numeric difference score is {round(state.diff_score, 2)} (lower = more similar).
 
-        Please:
-        - Summarize the visual mismatches (colors, spacing, font, layout, or image issues)
-        - Provide actionable frontend/CSS suggestions to fix discrepancies
-        - Rate overall match quality (0–100%)
+        Based on this score, describe:
+        - What visual differences may exist (colors, spacing, font, layout, alignment)
+        - What potential HTML/CSS fixes could align them
+        - Give an overall match percentage and qualitative assessment
         """
 
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
         )
 
         state.ai_report = response.choices[0].message.content.strip()
+        st.success("✅ AI analysis completed successfully!")
     except Exception as e:
         state.ai_report = f"❌ AI analysis failed: {e}"
+        st.error(state.ai_report)
     return state
 
 
 def generate_report(state: InputState):
     """Display all results in Streamlit UI."""
-    st.success("✅ Comparison complete!")
+    st.success("🎉 Comparison and analysis complete!")
     st.subheader("📊 Visual Comparison Result")
 
     col1, col2, col3 = st.columns(3)
@@ -127,7 +131,6 @@ def generate_report(state: InputState):
 # =====================================================
 
 graph = StateGraph(InputState)
-
 graph.add_node("capture_website_image", capture_website_image)
 graph.add_node("compare_images", compare_images)
 graph.add_node("ai_analyze", ai_analyze)
@@ -155,7 +158,7 @@ if run_button and uploaded_image:
     initial_state = InputState(
         figma_link=figma_link,
         web_url=web_url,
-        figma_image=figma_img
+        figma_image=figma_img,
     )
 
     workflow.invoke(initial_state)
