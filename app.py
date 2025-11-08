@@ -3,7 +3,7 @@ import tempfile
 import streamlit as st
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, ConfigDict
-from openai import OpenAI
+#use fal ai
 from PIL import Image, ImageChops, ImageStat
 from typing import Optional
 from io import BytesIO
@@ -84,7 +84,7 @@ def compare_images(state: InputState) -> InputState:
 
 def analyze_with_ai(state: InputState) -> InputState:
     """Use OpenAI model to generate feedback report"""
-    client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY")))
+    client = #use fal ai
 
     prompt = f"""
     You are a design QA assistant.
