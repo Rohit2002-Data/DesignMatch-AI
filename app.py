@@ -2,16 +2,22 @@ import os
 import tempfile
 import streamlit as st
 from langgraph.graph import StateGraph, END
-from langgraph.graph.state import State
+from pydantic import BaseModel
 from openai import OpenAI
 from PIL import Image, ImageChops, ImageStat
 import requests
 from io import BytesIO
 
-# =============== OPENAI SETUP ==================
-client = OpenAI(api_key="YOUR_OPENAI_KEY_HERE")  # Replace with your key
 
-# =============== STREAMLIT UI ==================
+# =====================================================
+# 🔑 OPENAI SETUP (replace with your actual key)
+# =====================================================
+client = OpenAI(api_key="YOUR_OPENAI_KEY_HERE")  # Put your key here
+
+
+# =====================================================
+# 🎨 STREAMLIT UI
+# =====================================================
 st.set_page_config(page_title="DesignMatch AI", layout="wide")
 st.title("🎨 DesignMatch AI – Figma vs Web Visual QA Agent")
 
@@ -22,30 +28,42 @@ uploaded_image = st.sidebar.file_uploader("Upload Figma Design Screenshot", type
 
 run_button = st.sidebar.button("🚀 Run Comparison")
 
-# =============== NODES (LangGraph) ==================
 
-class InputState(State):
-    figma_link: str
-    web_url: str
-    figma_image: Image.Image
-    web_image: Image.Image
-    diff_image: Image.Image
-    ai_report: str
+# =====================================================
+# 🧩 DEFINE STATE CLASS (Pydantic)
+# =====================================================
+class InputState(BaseModel):
+    figma_link: str = None
+    web_url: str = None
+    figma_image = None
+    web_image = None
+    diff_image = None
+    diff_score: float = 0.0
+    ai_report: str = ""
 
+
+# =====================================================
+# 🧱 NODES (LangGraph)
+# =====================================================
 
 def capture_website_image(state: InputState):
-    """Capture website screenshot using requests + simple screenshot service (no browser automation)."""
+    """Capture website screenshot using Thum.io API (no browser setup needed)."""
+    st.info("📸 Capturing website screenshot...")
     try:
         screenshot_url = f"https://image.thum.io/get/{state.web_url}"
-        response = requests.get(screenshot_url)
-        state.web_image = Image.open(BytesIO(response.content)).convert("RGB")
+        response = requests.get(screenshot_url, timeout=30)
+        if response.status_code == 200:
+            state.web_image = Image.open(BytesIO(response.content)).convert("RGB")
+        else:
+            raise Exception("Failed to fetch website screenshot.")
     except Exception as e:
-        st.error(f"Failed to capture website image: {e}")
+        st.error(f"❌ Failed to capture website image: {e}")
     return state
 
 
 def compare_images(state: InputState):
-    """Compare Figma design with website image."""
+    """Compare uploaded Figma design with live website image."""
+    st.info("🧩 Comparing images...")
     try:
         figma_img = state.figma_image.resize(state.web_image.size)
         diff = ImageChops.difference(figma_img, state.web_image)
@@ -54,47 +72,62 @@ def compare_images(state: InputState):
         state.diff_image = diff
         state.diff_score = diff_score
     except Exception as e:
-        st.error(f"Image comparison failed: {e}")
+        st.error(f"❌ Image comparison failed: {e}")
     return state
 
 
 def ai_analyze(state: InputState):
-    """Use GPT to analyze visual differences."""
+    """Use OpenAI GPT to analyze the visual differences."""
+    st.info("🤖 Analyzing visual differences with AI...")
     try:
         prompt = f"""
-        You are a design QA assistant. Analyze visual differences between a Figma design
-        and a live web page. The numeric difference score is {round(state.diff_score,2)}.
-        Provide insights on what might be wrong (colors, spacing, fonts, layout mismatches).
+        You are a design QA assistant.
+        The system has compared a Figma design with a live webpage.
+        The numeric difference score is {round(state.diff_score, 2)} (lower = more similar).
+
+        Please:
+        - Summarize the visual mismatches (colors, spacing, font, layout, or image issues)
+        - Provide actionable frontend/CSS suggestions to fix discrepancies
+        - Rate overall match quality (0–100%)
         """
+
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}]
         )
-        state.ai_report = response.choices[0].message.content
+
+        state.ai_report = response.choices[0].message.content.strip()
     except Exception as e:
-        state.ai_report = f"Error analyzing design: {e}"
+        state.ai_report = f"❌ AI analysis failed: {e}"
     return state
 
 
 def generate_report(state: InputState):
-    """Display visual and textual QA output."""
+    """Display all results in Streamlit UI."""
+    st.success("✅ Comparison complete!")
     st.subheader("📊 Visual Comparison Result")
+
     col1, col2, col3 = st.columns(3)
     with col1:
         st.image(state.figma_image, caption="🎨 Figma Design", use_column_width=True)
     with col2:
         st.image(state.web_image, caption="🌐 Website Screenshot", use_column_width=True)
     with col3:
-        st.image(state.diff_image, caption=f"🧩 Diff Image (Score: {round(state.diff_score,2)})", use_column_width=True)
+        st.image(state.diff_image, caption=f"🧩 Diff Image (Score: {round(state.diff_score, 2)})", use_column_width=True)
 
+    st.divider()
     st.subheader("🧠 AI QA Report")
     st.markdown(state.ai_report)
+
     return state
 
 
-# =============== BUILD THE GRAPH ==================
+# =====================================================
+# 🕸️ BUILD LANGGRAPH WORKFLOW
+# =====================================================
 
 graph = StateGraph(InputState)
+
 graph.add_node("capture_website_image", capture_website_image)
 graph.add_node("compare_images", compare_images)
 graph.add_node("ai_analyze", ai_analyze)
@@ -103,16 +136,29 @@ graph.add_node("generate_report", generate_report)
 graph.add_edge("capture_website_image", "compare_images")
 graph.add_edge("compare_images", "ai_analyze")
 graph.add_edge("ai_analyze", "generate_report")
+
 graph.set_entry_point("capture_website_image")
 graph.set_finish_point("generate_report")
 
 workflow = graph.compile()
 
-# =============== RUN PIPELINE ==================
+
+# =====================================================
+# 🚀 RUN THE PIPELINE
+# =====================================================
 
 if run_button and uploaded_image:
-    st.info("Processing comparison…")
+    st.info("Processing your comparison request...")
+
     figma_img = Image.open(uploaded_image).convert("RGB")
 
-    initial_state = InputState(figma_link=figma_link, web_url=web_url, figma_image=figma_img)
+    initial_state = InputState(
+        figma_link=figma_link,
+        web_url=web_url,
+        figma_image=figma_img
+    )
+
     workflow.invoke(initial_state)
+
+elif run_button and not uploaded_image:
+    st.warning("⚠️ Please upload a Figma design screenshot before running.")
